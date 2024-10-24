@@ -1,10 +1,8 @@
-"""Browsing-related tests for the EventStreamRuntime, which connects to the RuntimeClient running in the sandbox."""
+"""Browsing-related tests for the EventStreamRuntime, which connects to the ActionExecutor running in the sandbox."""
 
-import asyncio
 import json
 
-import pytest
-from conftest import _load_runtime
+from conftest import _close_test_runtime, _load_runtime
 
 from openhands.core.logger import openhands_logger as logger
 from openhands.events.action import (
@@ -16,40 +14,38 @@ from openhands.events.observation import (
     BrowserOutputObservation,
     CmdOutputObservation,
 )
-from openhands.runtime.client.runtime import EventStreamRuntime
 
 # ============================================================================================================================
 # Browsing tests
 # ============================================================================================================================
 
-PY3_FOR_TESTING = '/openhands/miniforge3/bin/mamba run -n base python3'
+PY3_FOR_TESTING = '/openhands/micromamba/bin/micromamba run -n openhands python3'
 
 
-@pytest.mark.asyncio
-async def test_simple_browse(temp_dir, box_class, run_as_openhands):
-    runtime = await _load_runtime(temp_dir, box_class, run_as_openhands)
+def test_simple_browse(temp_dir, box_class, run_as_openhands):
+    runtime = _load_runtime(temp_dir, box_class, run_as_openhands)
 
     # Test browse
     action_cmd = CmdRunAction(
         command=f'{PY3_FOR_TESTING} -m http.server 8000 > server.log 2>&1 &'
     )
     logger.info(action_cmd, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action_cmd)
+    obs = runtime.run_action(action_cmd)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
 
     assert isinstance(obs, CmdOutputObservation)
     assert obs.exit_code == 0
     assert '[1]' in obs.content
 
-    action_cmd = CmdRunAction(command='sleep 5 && cat server.log')
+    action_cmd = CmdRunAction(command='sleep 3 && cat server.log')
     logger.info(action_cmd, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action_cmd)
+    obs = runtime.run_action(action_cmd)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
     assert obs.exit_code == 0
 
     action_browse = BrowseURLAction(url='http://localhost:8000')
     logger.info(action_browse, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action_browse)
+    obs = runtime.run_action(action_browse)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
 
     assert isinstance(obs, BrowserOutputObservation)
@@ -65,23 +61,21 @@ async def test_simple_browse(temp_dir, box_class, run_as_openhands):
     # clean up
     action = CmdRunAction(command='rm -rf server.log')
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
     assert obs.exit_code == 0
 
-    await runtime.close()
-    await asyncio.sleep(1)
+    _close_test_runtime(runtime)
 
 
-@pytest.mark.asyncio
-async def test_browsergym_eval_env(temp_dir):
-    runtime = await _load_runtime(
+def test_browsergym_eval_env(box_class, temp_dir):
+    runtime = _load_runtime(
         temp_dir,
-        # only supported in event stream runtime
-        box_class=EventStreamRuntime,
+        box_class=box_class,
         run_as_openhands=False,  # need root permission to access file
         base_container_image='xingyaoww/od-eval-miniwob:v1.0',
         browsergym_eval_env='browsergym/miniwob.choose-list',
+        force_rebuild_runtime=True,
     )
     from openhands.runtime.browser.browser_env import (
         BROWSER_EVAL_GET_GOAL_ACTION,
@@ -91,7 +85,7 @@ async def test_browsergym_eval_env(temp_dir):
     # Test browse
     action = BrowseInteractiveAction(browser_actions=BROWSER_EVAL_GET_GOAL_ACTION)
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
 
     assert isinstance(obs, BrowserOutputObservation)
@@ -102,7 +96,7 @@ async def test_browsergym_eval_env(temp_dir):
     # Make sure the browser can produce observation in eva[l
     action = BrowseInteractiveAction(browser_actions='noop()')
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
     assert (
         obs.url.strip()
@@ -112,9 +106,8 @@ async def test_browsergym_eval_env(temp_dir):
     # Make sure the rewards are working
     action = BrowseInteractiveAction(browser_actions=BROWSER_EVAL_GET_REWARDS_ACTION)
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
     assert json.loads(obs.content) == [0.0]
 
-    await runtime.close()
-    await asyncio.sleep(1)
+    _close_test_runtime(runtime)

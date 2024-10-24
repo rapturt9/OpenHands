@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import os
 import tempfile
 from typing import Any
@@ -24,13 +25,21 @@ from openhands.core.config import (
     AppConfig,
     SandboxConfig,
     get_llm_config_arg,
+    load_from_toml,
     parse_arguments,
 )
 from openhands.core.logger import openhands_logger as logger
 from openhands.core.main import create_runtime, run_controller
-from openhands.events.action import CmdRunAction
+from openhands.events.action import CmdRunAction, MessageAction
 from openhands.events.observation import CmdOutputObservation
-from openhands.runtime.runtime import Runtime
+from openhands.runtime.base import Runtime
+
+# Configure visibility of unit tests to the Agent.
+USE_UNIT_TESTS = os.environ.get('USE_UNIT_TESTS', 'false').lower() == 'true'
+SKIP_NUM = os.environ.get('SKIP_NUM')
+SKIP_NUM = (
+    int(SKIP_NUM) if SKIP_NUM and SKIP_NUM.isdigit() and int(SKIP_NUM) >= 0 else None
+)
 
 
 def get_config(
@@ -39,23 +48,31 @@ def get_config(
     config = AppConfig(
         default_agent=metadata.agent_class,
         run_as_openhands=False,
-        runtime='eventstream',
+        runtime=os.environ.get('RUNTIME', 'eventstream'),
         max_iterations=metadata.max_iterations,
         sandbox=SandboxConfig(
             base_container_image='python:3.11-bookworm',
             enable_auto_lint=True,
             use_host_network=False,
             timeout=100,
+            api_key=os.environ.get('ALLHANDS_API_KEY', None),
         ),
         # do not mount workspace
         workspace_base=None,
         workspace_mount_path=None,
     )
     config.set_llm_config(metadata.llm_config)
+
+    # copy 'draft_editor' config if exists
+    config_copy = copy.deepcopy(config)
+    load_from_toml(config_copy)
+    if 'draft_editor' in config_copy.llms:
+        config.set_llm_config(config_copy.llms['draft_editor'], 'draft_editor')
+
     return config
 
 
-async def initialize_runtime(
+def initialize_runtime(
     runtime: Runtime,
     instance: pd.Series,
 ):
@@ -63,32 +80,40 @@ async def initialize_runtime(
 
     This function is called before the runtime is used to run the agent.
     """
-    logger.info(f"{'-' * 50} BEGIN Runtime Initialization Fn {'-' * 50}")
+    logger.info(f"\n{'-' * 50} BEGIN Runtime Initialization Fn {'-' * 50}\n")
     obs: CmdOutputObservation
 
     # Set instance id
     action = CmdRunAction(command='mkdir -p /workspace')
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     assert obs.exit_code == 0
 
     action = CmdRunAction(command='cd /workspace')
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     assert obs.exit_code == 0
 
     with tempfile.TemporaryDirectory() as tmpdir:
         file_path = os.path.join(tmpdir, f'{instance.instance_name}.py')
         with open(file_path, 'w') as f:
             f.write(instance.signature)
-        await runtime.copy_to(
+        runtime.copy_to(
             file_path,
             '/workspace',
         )
-    logger.info(f"{'-' * 50} END Runtime Initialization Fn {'-' * 50}")
+        if USE_UNIT_TESTS:
+            file_path = os.path.join(tmpdir, f'{instance.instance_name}_test.py')
+            with open(file_path, 'w') as f:
+                f.write(instance.test)
+            runtime.copy_to(
+                file_path,
+                '/workspace',
+            )
+    logger.info(f"\n{'-' * 50} END Runtime Initialization Fn {'-' * 50}\n")
 
 
-async def complete_runtime(
+def complete_runtime(
     runtime: Runtime,
     instance: pd.Series,
 ) -> dict[str, Any]:
@@ -98,33 +123,36 @@ async def complete_runtime(
     If you need to do something in the sandbox to get the correctness metric after
     the agent has run, modify this function.
     """
-    logger.info(f"{'-' * 50} BEGIN Runtime Completion Fn {'-' * 50}")
+    logger.info(f"\n{'-' * 50} BEGIN Runtime Completion Fn {'-' * 50}\n")
     obs: CmdOutputObservation
 
+    # Rewriting the test file to ignore any changes Agent may have made.
     script_name = f'{instance.instance_name}_test.py'
     with tempfile.TemporaryDirectory() as tmpdir:
         file_path = os.path.join(tmpdir, script_name)
         with open(file_path, 'w') as f:
             f.write(instance.test)
-        await runtime.copy_to(
+        runtime.copy_to(
             file_path,
             '/workspace',
         )
         logger.info(f'Running test file: {script_name}')
 
     action = CmdRunAction(
-        command=f'python -m unittest {script_name}',
+        command=f'python3 -m unittest {script_name}',
         keep_prompt=False,
     )
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
 
     exit_code = 1
     if isinstance(obs, CmdOutputObservation):
         exit_code = obs.exit_code
 
-    logger.info(f"{'-' * 50} END Runtime Completion Fn {'-' * 50}")
+    logger.info(f"\n{'-' * 50} END Runtime Completion Fn {'-' * 50}\n")
+
+    runtime.close()
 
     return {
         'test_output': obs.content,
@@ -132,7 +160,7 @@ async def complete_runtime(
     }
 
 
-async def process_instance(
+def process_instance(
     instance: pd.Series,
     metadata: EvalMetadata,
     reset_logger: bool = True,
@@ -144,7 +172,9 @@ async def process_instance(
         log_dir = os.path.join(metadata.eval_output_dir, 'infer_logs')
         reset_logger_for_multiprocessing(logger, str(instance.instance_id), log_dir)
     else:
-        logger.info(f'Starting evaluation for instance {str(instance.instance_id)}.')
+        logger.info(
+            f'\nStarting evaluation for instance {str(instance.instance_id)}.\n'
+        )
 
     # =============================================
     # build instruction
@@ -156,6 +186,15 @@ async def process_instance(
     instruction += INSTRUCTIONS_ADDENDUM.format(
         signature_file=f'{instance.instance_name}.py',
     )
+    if USE_UNIT_TESTS:
+        logger.info(
+            f'\nInstruction to run test_file: {instance.instance_name}_test.py\n'
+        )
+        instruction += (
+            f'Use `python -m unittest {instance.instance_name}_test.py` to run the test_file '
+            'and verify the correctness of your solution. DO NOT EDIT the test file.\n\n'
+        )
+
     instruction += (
         'IMPORTANT: You should ONLY interact with the environment provided '
         'to you AND NEVER ASK FOR HUMAN HELP.\n'
@@ -167,16 +206,18 @@ async def process_instance(
     # create sandbox and run the agent
     # =============================================
 
-    runtime: Runtime = await create_runtime(config, sid=str(instance.instance_id))
+    runtime: Runtime = create_runtime(config)
 
-    await initialize_runtime(runtime, instance=instance)
+    initialize_runtime(runtime, instance=instance)
 
     # Here's how you can run the agent (similar to the `main` function) and get the final task state
-    state: State | None = await run_controller(
-        config=config,
-        task_str=instruction,
-        runtime=runtime,
-        fake_user_response_fn=FAKE_RESPONSES[metadata.agent_class],
+    state: State | None = asyncio.run(
+        run_controller(
+            config=config,
+            initial_user_action=MessageAction(content=instruction),
+            runtime=runtime,
+            fake_user_response_fn=FAKE_RESPONSES[metadata.agent_class],
+        )
     )
     if state is None:
         raise ValueError('State should not be None.')
@@ -185,7 +226,7 @@ async def process_instance(
     # # result evaluation
     # # =============================================
 
-    return_val = await complete_runtime(runtime, instance)
+    return_val = complete_runtime(runtime, instance)
     exit_code = return_val['exit_code']
     test_output = return_val['test_output']
 
@@ -250,18 +291,20 @@ if __name__ == '__main__':
     eval_ids = None
     if args.eval_ids:
         eval_ids = str(args.eval_ids).split(',')
-        logger.info(f'Using specific dataset IDs: {eval_ids}')
+        logger.info(f'\nUsing specific dataset IDs: {eval_ids}\n')
 
     instances = prepare_dataset(
-        aider_bench_tests, output_file, args.eval_n_limit, eval_ids=eval_ids
+        aider_bench_tests,
+        output_file,
+        args.eval_n_limit,
+        eval_ids=eval_ids,
+        skip_num=SKIP_NUM,
     )
 
-    asyncio.run(
-        run_evaluation(
-            instances,
-            metadata,
-            output_file,
-            args.eval_num_workers,
-            process_instance,
-        )
+    run_evaluation(
+        instances,
+        metadata,
+        output_file,
+        args.eval_num_workers,
+        process_instance,
     )

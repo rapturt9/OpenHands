@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -49,6 +49,7 @@ async def test_set_agent_state(mock_agent, mock_event_stream):
 
     await controller.set_agent_state_to(AgentState.PAUSED)
     assert controller.get_agent_state() == AgentState.PAUSED
+    await controller.close()
 
 
 @pytest.mark.asyncio
@@ -65,6 +66,7 @@ async def test_on_event_message_action(mock_agent, mock_event_stream):
     message_action = MessageAction(content='Test message')
     await controller.on_event(message_action)
     assert controller.get_agent_state() == AgentState.RUNNING
+    await controller.close()
 
 
 @pytest.mark.asyncio
@@ -81,6 +83,7 @@ async def test_on_event_change_agent_state_action(mock_agent, mock_event_stream)
     change_state_action = ChangeAgentStateAction(agent_state=AgentState.PAUSED)
     await controller.on_event(change_state_action)
     assert controller.get_agent_state() == AgentState.PAUSED
+    await controller.close()
 
 
 @pytest.mark.asyncio
@@ -97,6 +100,7 @@ async def test_report_error(mock_agent, mock_event_stream):
     await controller.report_error(error_message)
     assert controller.state.last_error == error_message
     controller.event_stream.add_event.assert_called_once()
+    await controller.close()
 
 
 @pytest.mark.asyncio
@@ -116,6 +120,56 @@ async def test_step_with_exception(mock_agent, mock_event_stream):
 
     # Verify that report_error was called with the correct error message
     controller.report_error.assert_called_once_with('Malformed action')
+    await controller.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'delegate_state',
+    [
+        AgentState.RUNNING,
+        AgentState.FINISHED,
+        AgentState.ERROR,
+        AgentState.REJECTED,
+    ],
+)
+async def test_delegate_step_different_states(
+    mock_agent, mock_event_stream, delegate_state
+):
+    controller = AgentController(
+        agent=mock_agent,
+        event_stream=mock_event_stream,
+        max_iterations=10,
+        sid='test',
+        confirmation_mode=False,
+        headless_mode=True,
+    )
+
+    mock_delegate = AsyncMock()
+    controller.delegate = mock_delegate
+
+    mock_delegate.state.iteration = 5
+    mock_delegate.state.outputs = {'result': 'test'}
+    mock_delegate.agent.name = 'TestDelegate'
+
+    mock_delegate.get_agent_state = Mock(return_value=delegate_state)
+    mock_delegate._step = AsyncMock()
+    mock_delegate.close = AsyncMock()
+
+    await controller._delegate_step()
+
+    mock_delegate._step.assert_called_once()
+
+    if delegate_state == AgentState.RUNNING:
+        assert controller.delegate is not None
+        assert controller.state.iteration == 0
+        mock_delegate.close.assert_not_called()
+    else:
+        assert controller.delegate is None
+        assert controller.state.iteration == 5
+        mock_delegate.close.assert_called_once()
+
+    await controller.close()
 
 
 @pytest.mark.asyncio
@@ -134,6 +188,7 @@ async def test_step_max_iterations(mock_agent, mock_event_stream):
     await controller._step()
     assert controller.state.traffic_control_state == TrafficControlState.THROTTLING
     assert controller.state.agent_state == AgentState.PAUSED
+    await controller.close()
 
 
 @pytest.mark.asyncio
@@ -153,6 +208,7 @@ async def test_step_max_iterations_headless(mock_agent, mock_event_stream):
     assert controller.state.traffic_control_state == TrafficControlState.THROTTLING
     # In headless mode, throttling results in an error
     assert controller.state.agent_state == AgentState.ERROR
+    await controller.close()
 
 
 @pytest.mark.asyncio
@@ -172,6 +228,7 @@ async def test_step_max_budget(mock_agent, mock_event_stream):
     await controller._step()
     assert controller.state.traffic_control_state == TrafficControlState.THROTTLING
     assert controller.state.agent_state == AgentState.PAUSED
+    await controller.close()
 
 
 @pytest.mark.asyncio
@@ -192,3 +249,4 @@ async def test_step_max_budget_headless(mock_agent, mock_event_stream):
     assert controller.state.traffic_control_state == TrafficControlState.THROTTLING
     # In headless mode, throttling results in an error
     assert controller.state.agent_state == AgentState.ERROR
+    await controller.close()

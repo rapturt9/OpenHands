@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import os
 from typing import Any
@@ -28,9 +29,10 @@ from openhands.core.logger import openhands_logger as logger
 from openhands.core.main import create_runtime, run_controller
 from openhands.events.action import (
     CmdRunAction,
+    MessageAction,
 )
 from openhands.events.observation import CmdOutputObservation
-from openhands.runtime.runtime import Runtime
+from openhands.runtime.base import Runtime
 
 
 def codeact_user_response_mint(state: State, task: Task, task_config: dict[str, int]):
@@ -104,7 +106,7 @@ def get_config(
             base_container_image='xingyaoww/od-eval-mint:v1.0',
             enable_auto_lint=True,
             use_host_network=False,
-            runtime_extra_deps=f'$OD_INTERPRETER_PATH -m pip install {" ".join(MINT_DEPENDENCIES)}',
+            runtime_extra_deps=f'$OH_INTERPRETER_PATH -m pip install {" ".join(MINT_DEPENDENCIES)}',
         ),
         # do not mount workspace
         workspace_base=None,
@@ -114,7 +116,7 @@ def get_config(
     return config
 
 
-async def initialize_runtime(runtime: Runtime):
+def initialize_runtime(runtime: Runtime):
     """Initialize the runtime for the agent.
 
     This function is called before the runtime is used to run the agent.
@@ -125,18 +127,18 @@ async def initialize_runtime(runtime: Runtime):
     # Set instance id
     action = CmdRunAction(command='mkdir -p /workspace')
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     assert obs.exit_code == 0
 
     action = CmdRunAction(command='cd /workspace')
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     assert obs.exit_code == 0
 
     logger.info(f"{'-' * 50} END Runtime Initialization Fn {'-' * 50}")
 
 
-async def process_instance(
+def process_instance(
     instance: Any,
     metadata: EvalMetadata,
     reset_logger: bool = True,
@@ -173,14 +175,16 @@ async def process_instance(
         },
     )
 
-    runtime = await create_runtime(config, sid=instance.instance_id)
-    await initialize_runtime(runtime)
+    runtime = create_runtime(config)
+    initialize_runtime(runtime)
 
-    state: State | None = await run_controller(
-        config=config,
-        task_str=instruction,
-        runtime=runtime,
-        fake_user_response_fn=fake_user_response_fn,
+    state: State | None = asyncio.run(
+        run_controller(
+            config=config,
+            initial_user_action=MessageAction(content=instruction),
+            runtime=runtime,
+            fake_user_response_fn=fake_user_response_fn,
+        )
     )
 
     if state is None:

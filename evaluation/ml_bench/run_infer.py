@@ -13,6 +13,7 @@ TODOs:
 - Clean up the code and docker image used for evaluation.
 """
 
+import asyncio
 import os
 from typing import Any
 
@@ -38,9 +39,9 @@ from openhands.core.config import (
 )
 from openhands.core.logger import openhands_logger as logger
 from openhands.core.main import create_runtime, run_controller
-from openhands.events.action import CmdRunAction
+from openhands.events.action import CmdRunAction, MessageAction
 from openhands.events.observation import CmdOutputObservation
-from openhands.runtime.runtime import Runtime
+from openhands.runtime.base import Runtime
 
 config = load_app_config()
 
@@ -92,7 +93,7 @@ def get_config(
     return config
 
 
-async def initialize_runtime(
+def initialize_runtime(
     runtime: Runtime,
     instance: pd.Series,  # this argument is not required
 ):
@@ -106,38 +107,38 @@ async def initialize_runtime(
     # Set instance id
     action = CmdRunAction(command='mkdir -p /workspace')
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     assert obs.exit_code == 0
 
     # Set up the task environment
     action = CmdRunAction(command=f'conda activate {ID2CONDA[instance["github_id"]]}')
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     assert obs.exit_code == 0
 
     repo_url = instance['github']
     repo_name = repo_url.split('/')[-1]
     action = CmdRunAction(command=f'git clone {repo_url} /workspace/{repo_name}')
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     assert obs.exit_code == 0
 
     action = CmdRunAction(command=f'chmod -R 777 /workspace/{repo_name}')
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     assert obs.exit_code == 0
 
     # Navigate to the task's code path
     task_path = os.path.join('/workspace', repo_name, instance['path'][2:])
     action = CmdRunAction(command=f'cd {task_path}')
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     assert obs.exit_code == 0
 
     logger.info(f"{'-' * 50} END Runtime Initialization Fn {'-' * 50}")
 
 
-async def complete_runtime(
+def complete_runtime(
     runtime: Runtime,
     instance: pd.Series,  # this argument is not required, but it is used to get the workspace_dir_name
 ) -> dict[str, Any]:
@@ -160,7 +161,7 @@ async def complete_runtime(
 
     action = CmdRunAction(command=f'cat {eval_script}', keep_prompt=False)
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     if obs.exit_code == 0:
         eval_script_content = obs.content
     else:
@@ -172,7 +173,7 @@ async def complete_runtime(
         timeout=600,
     )
     logger.info(action, extra={'msg_type': 'ACTION'})
-    obs = await runtime.run_action(action)
+    obs = runtime.run_action(action)
     if obs.exit_code == 0:
         eval_output = obs.content
     else:
@@ -200,9 +201,7 @@ async def complete_runtime(
     return outputs
 
 
-async def process_instance(
-    instance: Any, metadata: EvalMetadata, reset_logger: bool = True
-):
+def process_instance(instance: Any, metadata: EvalMetadata, reset_logger: bool = True):
     config = get_config(metadata)
 
     # Setup the logger properly, so you can run multi-processing to parallelize the evaluation
@@ -211,9 +210,6 @@ async def process_instance(
         reset_logger_for_multiprocessing(logger, instance['instance_id'], log_dir)
     else:
         logger.info(f'Starting evaluation for instance {instance["instance_id"]}.')
-
-    # Create a sandbox, using the instance ID and PID as the session ID to avoid conflicts
-    sid = str(instance['instance_id'])
 
     repo_url = instance['github']
     repo_name = repo_url.split('/')[-1]
@@ -236,22 +232,24 @@ async def process_instance(
     )
     instruction += AGENT_CLS_TO_INST_SUFFIX[metadata.agent_class]
 
-    runtime = await create_runtime(config, sid=sid)
-    await initialize_runtime(runtime, instance)
+    runtime = create_runtime(config)
+    initialize_runtime(runtime, instance)
 
     # Run the agent
-    state: State | None = await run_controller(
-        config=config,
-        task_str=instruction,
-        runtime=runtime,
-        fake_user_response_fn=AGENT_CLS_TO_FAKE_USER_RESPONSE_FN.get(
-            metadata.agent_class
-        ),
+    state: State | None = asyncio.run(
+        run_controller(
+            config=config,
+            initial_user_action=MessageAction(content=instruction),
+            runtime=runtime,
+            fake_user_response_fn=AGENT_CLS_TO_FAKE_USER_RESPONSE_FN.get(
+                metadata.agent_class
+            ),
+        )
     )
     assert state is not None
     metrics = state.metrics.get() if state.metrics else {}
 
-    test_result = await complete_runtime(runtime)
+    test_result = complete_runtime(runtime)
 
     # history is now available as a stream of events, rather than list of pairs of (Action, Observation)
     # for compatibility with the existing output format, we can remake the pairs here

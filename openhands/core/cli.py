@@ -4,10 +4,12 @@ from typing import Type
 
 from termcolor import colored
 
-import agenthub  # noqa F401 (we import this to get the agents registered)
+import openhands.agenthub  # noqa F401 (we import this to get the agents registered)
+from openhands import __version__
 from openhands.controller import AgentController
 from openhands.controller.agent import Agent
 from openhands.core.config import (
+    get_parser,
     load_app_config,
 )
 from openhands.core.logger import openhands_logger as logger
@@ -17,16 +19,18 @@ from openhands.events.action import (
     Action,
     ChangeAgentStateAction,
     CmdRunAction,
+    FileEditAction,
     MessageAction,
 )
 from openhands.events.event import Event
 from openhands.events.observation import (
     AgentStateChangedObservation,
     CmdOutputObservation,
+    FileEditObservation,
 )
 from openhands.llm.llm import LLM
 from openhands.runtime import get_runtime_cls
-from openhands.runtime.runtime import Runtime
+from openhands.runtime.base import Runtime
 from openhands.storage import get_file_store
 
 
@@ -48,6 +52,10 @@ def display_command_output(output: str):
     print('\n')
 
 
+def display_file_edit(event: FileEditAction | FileEditObservation):
+    print(colored(str(event), 'green'))
+
+
 def display_event(event: Event):
     if isinstance(event, Action):
         if hasattr(event, 'thought'):
@@ -59,12 +67,33 @@ def display_event(event: Event):
         display_command(event.command)
     if isinstance(event, CmdOutputObservation):
         display_command_output(event.content)
+    if isinstance(event, FileEditAction):
+        display_file_edit(event)
+    if isinstance(event, FileEditObservation):
+        display_file_edit(event)
 
 
 async def main():
     """Runs the agent in CLI mode"""
+
+    parser = get_parser()
+    # Add the version argument
+    parser.add_argument(
+        '-v',
+        '--version',
+        action='version',
+        version=f'{__version__}',
+        help='Show the version number and exit',
+        default=None,
+    )
+    args = parser.parse_args()
+
+    if args.version:
+        print(f'OpenHands version: {__version__}')
+        return
+
     logger.setLevel(logging.WARNING)
-    config = load_app_config()
+    config = load_app_config(config_file=args.config_file)
     sid = 'cli'
 
     agent_cls: Type[Agent] = Agent.get_cls(config.default_agent)
@@ -79,13 +108,12 @@ async def main():
     event_stream = EventStream(sid, file_store)
 
     runtime_cls = get_runtime_cls(config.runtime)
-    runtime: Runtime = runtime_cls(
+    runtime: Runtime = runtime_cls(  # noqa: F841
         config=config,
         event_stream=event_stream,
         sid=sid,
         plugins=agent_cls.sandbox_plugins,
     )
-    await runtime.ainit()
 
     controller = AgentController(
         agent=agent,
@@ -94,6 +122,9 @@ async def main():
         agent_to_llm_config=config.get_agent_to_llm_config_map(),
         event_stream=event_stream,
     )
+
+    if controller is not None:
+        controller.agent_task = asyncio.create_task(controller.start_step_loop())
 
     async def prompt_for_next_task():
         next_message = input('How can I help? >> ')

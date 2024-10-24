@@ -6,19 +6,32 @@ LEVEL=$1
 # - base, keyword "sweb.base"
 # - env, keyword "sweb.env"
 # - instance, keyword "sweb.eval"
+SET=$2
 
 if [ -z "$LEVEL" ]; then
-    echo "Usage: $0 <cache_level>"
+    echo "Usage: $0 <cache_level> <set>"
     echo "cache_level: base, env, or instance"
+    echo "set: lite, full"
     exit 1
 fi
 
-NAMESPACE=$2 # xingyaoww
-if [ -z "$NAMESPACE" ]; then
-    echo "Default to namespace: xingyaoww"
-    NAMESPACE="xingyaoww"
+if [ -z "$SET" ]; then
+    echo "Usage: $0 <cache_level> <set>"
+    echo "cache_level: base, env, or instance"
+    echo "set: lite, full, default is lite"
+    SET="lite"
 fi
-IMAGE_FILE="$(dirname "$0")/all-swebench-lite-instance-images.txt"
+
+# Check if namespace is provided via argument $3, otherwise default to 'xingyaoww'
+NAMESPACE=${3:-xingyaoww}
+
+echo "Using namespace: $NAMESPACE"
+
+if [ "$SET" == "lite" ]; then
+    IMAGE_FILE="$(dirname "$0")/all-swebench-lite-instance-images.txt"
+else
+    IMAGE_FILE="$(dirname "$0")/all-swebench-full-instance-images.txt"
+fi
 
 # Define a pattern based on the level
 case $LEVEL in

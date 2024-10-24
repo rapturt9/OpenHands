@@ -1,6 +1,8 @@
-import datetime
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
+
+from openhands.llm.metrics import Metrics
 
 
 class EventSource(str, Enum):
@@ -23,10 +25,14 @@ class Event:
         return -1
 
     @property
-    def timestamp(self) -> datetime.datetime | None:
-        if hasattr(self, '_timestamp'):
-            return self._timestamp  # type: ignore[attr-defined]
-        return None
+    def timestamp(self):
+        if hasattr(self, '_timestamp') and isinstance(self._timestamp, str):
+            return self._timestamp
+
+    @timestamp.setter
+    def timestamp(self, value: datetime) -> None:
+        if isinstance(value, datetime):
+            self._timestamp = value.isoformat()
 
     @property
     def source(self) -> EventSource | None:
@@ -49,3 +55,19 @@ class Event:
     @timeout.setter
     def timeout(self, value: int | None) -> None:
         self._timeout = value
+
+        # Check if .blocking is an attribute of the event
+        if hasattr(self, 'blocking'):
+            # .blocking needs to be set to True if .timeout is set
+            self.blocking = True
+
+    # optional metadata, LLM call cost of the edit
+    @property
+    def llm_metrics(self) -> Metrics | None:
+        if hasattr(self, '_llm_metrics'):
+            return self._llm_metrics  # type: ignore[attr-defined]
+        return None
+
+    @llm_metrics.setter
+    def llm_metrics(self, value: Metrics) -> None:
+        self._llm_metrics = value

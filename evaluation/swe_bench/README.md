@@ -19,7 +19,6 @@ Please follow instruction [here](../README.md#setup) to setup your local develop
 OpenHands now support using the [official evaluation docker](https://github.com/princeton-nlp/SWE-bench/blob/main/docs/20240627_docker/README.md) for both **[inference](#run-inference-on-swe-bench-instances) and [evaluation](#evaluate-generated-patches)**.
 This is now the default behavior.
 
-
 ## Run Inference on SWE-Bench Instances
 
 Make sure your Docker daemon is running, and you have ample disk space (at least 200-500GB, depends on the SWE-Bench set you are running on) for the [instance-level docker image](#openhands-swe-bench-instance-level-docker-support).
@@ -30,28 +29,29 @@ When the `run_infer.sh` script is started, it will automatically pull the releva
 ./evaluation/swe_bench/scripts/run_infer.sh [model_config] [git-version] [agent] [eval_limit] [max_iter] [num_workers] [dataset] [dataset_split]
 
 # Example
-./evaluation/swe_bench/scripts/run_infer.sh llm.eval_gpt4_1106_preview HEAD CodeActAgent 300 30 1 princeton-nlp/SWE-bench_Lite test
+./evaluation/swe_bench/scripts/run_infer.sh llm.eval_gpt4o_mini HEAD CodeActAgent 300 30 1 princeton-nlp/SWE-bench_Lite test
 ```
 
 where `model_config` is mandatory, and the rest are optional.
 
 - `model_config`, e.g. `eval_gpt4_1106_preview`, is the config group name for your
-LLM settings, as defined in your `config.toml`.
+  LLM settings, as defined in your `config.toml`.
 - `git-version`, e.g. `HEAD`, is the git commit hash of the OpenHands version you would
-like to evaluate. It could also be a release tag like `0.6.2`.
+  like to evaluate. It could also be a release tag like `0.6.2`.
 - `agent`, e.g. `CodeActAgent`, is the name of the agent for benchmarks, defaulting
-to `CodeActAgent`.
+  to `CodeActAgent`.
 - `eval_limit`, e.g. `10`, limits the evaluation to the first `eval_limit` instances. By
-default, the script evaluates the entire SWE-bench_Lite test set (300 issues). Note:
-in order to use `eval_limit`, you must also set `agent`.
+  default, the script evaluates the entire SWE-bench_Lite test set (300 issues). Note:
+  in order to use `eval_limit`, you must also set `agent`.
 - `max_iter`, e.g. `20`, is the maximum number of iterations for the agent to run. By
-default, it is set to 30.
+  default, it is set to 30.
 - `num_workers`, e.g. `3`, is the number of parallel workers to run the evaluation. By
-default, it is set to 1.
+  default, it is set to 1.
 - `dataset`, a huggingface dataset name. e.g. `princeton-nlp/SWE-bench` or `princeton-nlp/SWE-bench_Lite`, specifies which dataset to evaluate on.
 - `dataset_split`, split for the huggingface dataset. e.g., `test`, `dev`. Default to `test`.
 
 There are also two optional environment variables you can set.
+
 ```
 export USE_HINT_TEXT=true # if you want to use hint text in the evaluation. Default to false. Ignore this if you are not sure.
 export USE_INSTANCE_IMAGE=true # if you want to use instance-level docker images. Default to true
@@ -127,9 +127,10 @@ With `output.jsonl` file, you can run `eval_infer.sh` to evaluate generated patc
 **This evaluation is performed using the official dockerized evaluation announced [here](https://github.com/princeton-nlp/SWE-bench/blob/main/docs/20240627_docker/README.md).**
 
 > If you want to evaluate existing results, you should first run this to clone existing outputs
->```bash
->git clone https://huggingface.co/spaces/OpenHands/evaluation evaluation/evaluation_outputs
->```
+>
+> ```bash
+> git clone https://huggingface.co/spaces/OpenHands/evaluation evaluation/evaluation_outputs
+> ```
 
 NOTE, you should have already pulled the instance-level OR env-level docker images following [this section](#openhands-swe-bench-instance-level-docker-support).
 
@@ -143,6 +144,7 @@ Then you can run the following:
 ```
 
 The script now accepts optional arguments:
+
 - `instance_id`: Specify a single instance to evaluate (optional)
 - `dataset_name`: The name of the dataset to use (default: `"princeton-nlp/SWE-bench_Lite"`)
 - `split`: The split of the dataset to use (default: `"test"`)
@@ -179,7 +181,6 @@ To clean-up all existing runtimes that you've already started, run:
 ALLHANDS_API_KEY="YOUR-API-KEY" ./evaluation/swe_bench/scripts/cleanup_remote_runtime.sh
 ```
 
-
 ## Visualize Results
 
 First you need to clone `https://huggingface.co/spaces/OpenHands/evaluation` and add your own running results from openhands into the `outputs` of the cloned repo.
@@ -189,6 +190,7 @@ git clone https://huggingface.co/spaces/OpenHands/evaluation
 ```
 
 **(optional) setup streamlit environment with conda**:
+
 ```bash
 cd evaluation
 conda create -n streamlit python=3.10

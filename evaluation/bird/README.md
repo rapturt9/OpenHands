@@ -10,18 +10,20 @@ Please follow instruction [here](../README.md#setup) to setup your local develop
 
 ```bash
 ./evaluation/bird/scripts/run_infer.sh [model_config] [git-version]
+
+# Example
+./evaluation/bird/scripts/run_infer.sh llm.eval_gpt4o_mini 0.10.0
 ```
 
 - `model_config`, e.g. `eval_gpt4_1106_preview`, is the config group name for your
-LLM settings, as defined in your `config.toml`.
+  LLM settings, as defined in your `config.toml`.
 
 - `git-version`, e.g. `HEAD`, is the git commit hash of the OpenHands version you would
-like to evaluate. It could also be a release tag like `0.6.2`.
+  like to evaluate. It could also be a release tag like `0.6.2`.
 
 ## Examples
 
 For each problem, OpenHands is given a set number of iterations to fix the failing code. The history field shows each iteration's response to correct its code that fails any test case.
-
 
 ```
 {

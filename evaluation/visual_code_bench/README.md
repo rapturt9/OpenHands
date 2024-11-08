@@ -1,3 +1,5 @@
+mamba activate openhands
+
 Main code: https://github.com/malhotra5/VisualCodeBench
 
 Huggingface: https://huggingface.co/datasets/rvmalhot/VisualCodeBench
@@ -17,6 +19,10 @@ To start an evaluation run, use the following command:
 
 ```bash
 ./evaluation/visual_code_bench/scripts/run_infer.sh [model_config] [commit_hash] [eval_limit] [num_workers]
+
+# example
+./evaluation/visual_code_bench/scripts/run_infer.sh llm.eval_gpt4o_mini HEAD CodeActAgent 5 1
+
 ```
 
 # BIRD Evaluation with OpenHands
@@ -33,7 +39,7 @@ Please follow instruction [here](../README.md#setup) to setup your local develop
 ./evaluation/visual_code_agent/scripts/run_infer.sh [model_config] [git-version]
 
 # Example
-./evaluation/visual_code_agent/scripts/run_infer.sh llm.eval_gpt4o_mini 0.10.0
+./evaluation/visual_code_agent/scripts/run_infer.sh llm.eval_gpt4o_mini HEAD
 ```
 
 - `model_config`, e.g. `eval_gpt4_1106_preview`, is the config group name for your

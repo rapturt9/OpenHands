@@ -12,7 +12,7 @@ Please follow instruction [here](../README.md#setup) to setup your local develop
 ./evaluation/bird/scripts/run_infer.sh [model_config] [git-version]
 
 # Example
-./evaluation/bird/scripts/run_infer.sh llm.eval_gpt4o_mini 0.10.0
+./evaluation/bird/scripts/run_infer.sh llm.eval_gpt4o_mini HEAD
 ```
 
 - `model_config`, e.g. `eval_gpt4_1106_preview`, is the config group name for your

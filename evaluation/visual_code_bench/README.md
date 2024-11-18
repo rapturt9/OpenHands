@@ -10,9 +10,9 @@ This folder contains the evaluation harness for evaluating changes in the Visual
 
 ## Setup Environment and LLM Configuration
 
-Please follow instructions [here](https://github.com/All-Hands-AI/OpenHands/blob/main/Development.md) to setup your local development environment
+Please follow instructions `/Development.md` to setup your local development environment
 
-Evaluation instructions: /Users/ram/Documents/GitHub/OpenDevin/docs/modules/usage/how-to/evaluation-harness.md
+Evaluation instructions: `/Users/ram/Documents/GitHub/OpenDevin/docs/modules/usage/how-to/evaluation-harness.md`
 
 ## Running the Evaluation
 
@@ -86,3 +86,5 @@ Evaluation
 Clip score for image similarity and block level matching of html elements
 
 Our goal is to create the evaluation to get the new html file by running codeact on the original html and instructions. We will then compare the new html file (and screenshot) with the original html file (and screenshot) to get the clip score.
+
+Take inspiration from `evaluation/bird/README.md`

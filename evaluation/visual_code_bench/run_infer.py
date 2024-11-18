@@ -10,7 +10,6 @@ from openhands.core.config import (
     SandboxConfig,
     get_llm_config_arg,
 )
-from openhands.core.main import create_runtime
 from openhands.events.action import CmdRunAction
 
 # Define workspace and output directories
@@ -53,10 +52,54 @@ def parse_args():
 
 
 def load_visualcodebench(limit=None):
+    from huggingface_hub import hf_hub_download
+
     dataset = load_dataset('rvmalhot/VisualCodeBench', split='train')
     if limit:
         dataset = dataset.select(range(limit))
-    return dataset
+
+    # Convert PIL images to bytes for saving
+    def process_example(example):
+        # Save images as bytes
+        prev_img_bytes = example['prev_image']
+        post_img_bytes = example['post_image']
+
+        # Load code files from the dataset
+        task_id = example['id']
+        try:
+            prev_html_path = hf_hub_download(
+                repo_id='rvmalhot/VisualCodeBench',
+                filename=f'data/{task_id}/prev/index.html',
+                repo_type='dataset',
+            )
+            with open(prev_html_path, 'r') as f:
+                prev_code = f.read()
+        except Exception as e:
+            print(f'Error loading prev HTML for task {task_id}: {e}')
+            prev_code = example['prev_code_files']
+
+        try:
+            post_html_path = hf_hub_download(
+                repo_id='rvmalhot/VisualCodeBench',
+                filename=f'data/{task_id}/post/index.html',
+                repo_type='dataset',
+            )
+            with open(post_html_path, 'r') as f:
+                post_code = f.read()
+        except Exception as e:
+            print(f'Error loading post HTML for task {task_id}: {e}')
+            post_code = example['post_code_files']
+
+        return {
+            'id': example['id'],
+            'prev_image': prev_img_bytes,
+            'post_image': post_img_bytes,
+            'changes': example['changes'],
+            'prev_code_files': prev_code,
+            'post_code_files': post_code,
+        }
+
+    return dataset.map(process_example)
 
 
 def setup_workspace(task):
@@ -99,46 +142,66 @@ def evaluate(task, screenshot_path):
 
 
 def run_task(task, config, agent_cls):
-    # instruction = setup_workspace(task)
+    # Create workspace directory if it doesn't exist
+    os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
-    runtime = create_runtime(config)
-    try:
-        # Copy setup files to workspace
-        runtime.copy_to(WORKSPACE_DIR, '/workspace')
+    # Save the HTML file
+    html_path = os.path.join(WORKSPACE_DIR, 'index.html')
+    with open(html_path, 'w') as f:
+        f.write(task['prev_code_files'])
 
-        # Run the agent
-        # state: State = run_controller(
-        #     config=config,
-        #     initial_user_action=MessageAction(content=instruction),
-        #     fake_user_response_fn=lambda state: 'Please continue working as per instructions.',
-        #     runtime=runtime,
-        # )
+    # Save the prev_image for reference
+    prev_img_path = os.path.join(WORKSPACE_DIR, 'prev_image.png')
+    task['prev_image'].save(prev_img_path)
 
-        # Capture the screenshot of the final HTML output
-        screenshot_path = capture_screenshot(runtime, task['id'])
+    # Save the post_image for comparison
+    post_img_path = os.path.join(WORKSPACE_DIR, 'post_image.png')
+    task['post_image'].save(post_img_path)
 
-        # Evaluation: Compare the screenshot with the expected post_image
-        passed = evaluate(task, screenshot_path)
+    # Save the results
+    result = {
+        'task_id': task['id'],
+        'passed': False,  # Can't evaluate without Docker
+        'screenshot_path': None,
+        'html_path': os.path.join(HTML_FILES_DIR, f"{task['id']}_index.html"),
+    }
+    save_results(result)
 
-        # Save the results
-        result = {
-            'task_id': task['id'],
-            'passed': passed,
-            'screenshot_path': screenshot_path,
-            'html_path': os.path.join(HTML_FILES_DIR, f"{task['id']}_index.html"),
-        }
-        save_results(result)
-    finally:
-        runtime.close()
+    print(f"\nTask {task['id']} changes:")
+    print(task['changes'])
 
 
 def save_results(result):
     """Save HTML and screenshot for each task."""
     html_save_path = result['html_path']
-    with open(html_save_path, 'w') as f:
-        f.write(open(os.path.join(WORKSPACE_DIR, 'index.html')).read())
-    with open(os.path.join(HTML_FILES_DIR, 'results.json'), 'a') as results_file:
-        json.dump(result, results_file, indent=4)
+    try:
+        with open(os.path.join(WORKSPACE_DIR, 'index.html'), 'r') as src:
+            with open(html_save_path, 'w') as dst:
+                dst.write(src.read())
+    except Exception as e:
+        print(f'Error saving HTML: {e}')
+
+    results_file_path = os.path.join(HTML_FILES_DIR, 'results.json')
+    try:
+        # Load existing results
+        results = []
+        if os.path.exists(results_file_path):
+            with open(results_file_path, 'r') as f:
+                try:
+                    results = json.load(f)
+                    if not isinstance(results, list):
+                        results = [results]
+                except json.JSONDecodeError:
+                    results = []
+
+        # Add new result
+        results.append(result)
+
+        # Save updated results
+        with open(results_file_path, 'w') as f:
+            json.dump(results, f, indent=4)
+    except Exception as e:
+        print(f'Error saving results: {e}')
 
 
 def get_config(agent_cls, llm_config_arg, max_iterations):

@@ -1,4 +1,7 @@
 #!/bin/bash
+set -eo pipefail
+
+source "evaluation/utils/version_control.sh"
 
 # Check if required arguments are provided
 if [ "$#" -lt 4 ]; then
@@ -13,15 +16,31 @@ AGENT_CLS=$3
 EVAL_LIMIT=$4
 NUM_WORKERS=${5:-1}  # Default to 1 worker if not specified
 
-# Navigate to the repository root
-cd "$(git rev-parse --show-toplevel)"
-
 # Checkout the specified commit
-git checkout $COMMIT_HASH
+checkout_eval_branch
 
-# Run the evaluation
-python3 -m evaluation.visual_code_bench.run_infer \
-    --llm-config $MODEL_CONFIG \
-    --agent-cls $AGENT_CLS \
-    --eval-n-limit $EVAL_LIMIT \
-    --eval-num-workers $NUM_WORKERS
+if [ -z "$AGENT" ]; then
+  echo "Agent not specified, use default CodeActAgent"
+  AGENT="CodeActAgent"
+fi
+
+get_agent_version
+
+echo "AGENT: $AGENT"
+echo "AGENT_VERSION: $AGENT_VERSION"
+echo "MODEL_CONFIG: $MODEL_CONFIG"
+
+COMMAND="poetry run python evaluation/bird/run_infer.py \
+  --agent-cls $AGENT \
+  --llm-config $MODEL_CONFIG \
+  --max-iterations 5 \
+  --eval-num-workers $NUM_WORKERS \
+  --eval-note $AGENT_VERSION" \
+
+if [ -n "$EVAL_LIMIT" ]; then
+  echo "EVAL_LIMIT: $EVAL_LIMIT"
+  COMMAND="$COMMAND --eval-n-limit $EVAL_LIMIT"
+fi
+
+# Run the command
+eval $COMMAND

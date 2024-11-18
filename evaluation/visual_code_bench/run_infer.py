@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import json
 import os
 
@@ -10,7 +11,8 @@ from openhands.core.config import (
     SandboxConfig,
     get_llm_config_arg,
 )
-from openhands.events.action import CmdRunAction
+from openhands.core.main import create_runtime, run_controller
+from openhands.events.action import CmdRunAction, MessageAction
 
 # Define workspace and output directories
 WORKSPACE_DIR = './workspace'
@@ -132,55 +134,101 @@ def capture_screenshot(runtime, task_id):
 
 
 def evaluate(task, screenshot_path):
-    """Simple pixel-by-pixel comparison of generated screenshot with post_image."""
-    post_img = task['post_image']
-    generated_img = Image.open(screenshot_path)
+    """Compare generated screenshot with post_image using CLIP score."""
+    try:
+        import torch
+        from transformers import CLIPModel, CLIPProcessor
 
-    # Calculate the difference and check if the image matches
-    diff = ImageChops.difference(generated_img, post_img)
-    return not diff.getbbox()  # Returns True if images match exactly
+        # Load CLIP model and processor
+        model = CLIPModel.from_pretrained('openai/clip-vit-base-patch32')
+        processor = CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32')
+
+        # Load images
+        post_img = task['post_image']
+        generated_img = Image.open(screenshot_path)
+
+        # Process images
+        inputs = processor(
+            images=[post_img, generated_img], return_tensors='pt', padding=True
+        )
+
+        # Get image features
+        image_features = model.get_image_features(**inputs)
+
+        # Calculate cosine similarity
+        similarity = torch.nn.functional.cosine_similarity(
+            image_features[0].unsqueeze(0), image_features[1].unsqueeze(0)
+        ).item()
+
+        return similarity > 0.95  # Consider it a match if similarity > 95%
+    except Exception as e:
+        print(f'Error in CLIP evaluation: {e}')
+        # Fallback to pixel comparison if CLIP fails
+        diff = ImageChops.difference(generated_img, post_img)
+        return not diff.getbbox()
 
 
 def run_task(task, config, agent_cls):
-    # Create workspace directory if it doesn't exist
-    os.makedirs(WORKSPACE_DIR, exist_ok=True)
+    """Run a single task using the sandbox environment."""
+    try:
+        # Create workspace directory if it doesn't exist
+        os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
-    # Save the HTML file
-    html_path = os.path.join(WORKSPACE_DIR, 'index.html')
-    with open(html_path, 'w') as f:
-        f.write(task['prev_code_files'])
+        # Setup workspace and get instruction
+        instruction = setup_workspace(task)
 
-    # Save the prev_image for reference
-    prev_img_path = os.path.join(WORKSPACE_DIR, 'prev_image.png')
-    task['prev_image'].save(prev_img_path)
+        # Create runtime and run the agent
+        runtime = create_runtime(config)
+        state = asyncio.run(
+            run_controller(
+                config=config,
+                initial_user_action=MessageAction(content=instruction),
+                runtime=runtime,
+            )
+        )
 
-    # Save the post_image for comparison
-    post_img_path = os.path.join(WORKSPACE_DIR, 'post_image.png')
-    task['post_image'].save(post_img_path)
+        if state is None:
+            print(f"Task {task['id']} did not complete successfully")
+            return {
+                'task_id': task['id'],
+                'passed': False,
+                'error': state.last_error if state else 'Task did not complete',
+            }
 
-    # Save the results
-    result = {
-        'task_id': task['id'],
-        'passed': False,  # Can't evaluate without Docker
-        'screenshot_path': None,
-        'html_path': os.path.join(HTML_FILES_DIR, f"{task['id']}_index.html"),
-    }
-    save_results(result)
+        # Save files and capture screenshot
+        html_path = os.path.join(HTML_FILES_DIR, f"{task['id']}_index.html")
+        with open(html_path, 'w') as f:
+            f.write(task['prev_code_files'])
 
-    print(f"\nTask {task['id']} changes:")
-    print(task['changes'])
+        screenshot_path = capture_screenshot(runtime, task['id'])
+
+        # Evaluate results
+        passed = evaluate(task, screenshot_path)
+
+        result = {
+            'task_id': task['id'],
+            'passed': passed,
+            'screenshot_path': screenshot_path,
+            'html_path': html_path,
+        }
+        save_results(result)
+        return result
+
+    except Exception as e:
+        print(f"Error running task {task['id']}: {e}")
+        result = {
+            'task_id': task['id'],
+            'passed': False,
+            'error': str(e),
+            'screenshot_path': None,
+            'html_path': None,
+        }
+        save_results(result)
+        return result
 
 
 def save_results(result):
     """Save HTML and screenshot for each task."""
-    html_save_path = result['html_path']
-    try:
-        with open(os.path.join(WORKSPACE_DIR, 'index.html'), 'r') as src:
-            with open(html_save_path, 'w') as dst:
-                dst.write(src.read())
-    except Exception as e:
-        print(f'Error saving HTML: {e}')
-
     results_file_path = os.path.join(HTML_FILES_DIR, 'results.json')
     try:
         # Load existing results
@@ -224,7 +272,16 @@ def get_config(agent_cls, llm_config_arg, max_iterations):
     return config
 
 
+def get_event_stream():
+    from openhands.events import EventStream
+    from openhands.storage import InMemoryFileStore
+
+    file_store = InMemoryFileStore()
+    return EventStream(sid='default', file_store=file_store)
+
+
 def main():
+    """Main function to run the evaluation."""
     args = parse_args()
     llm_config_arg = get_llm_config_arg(args.llm_config)
 
@@ -237,9 +294,48 @@ def main():
     # Load the dataset from Hugging Face
     dataset = load_visualcodebench(limit=args.eval_n_limit)
 
-    # Process each task in the dataset
-    for task in dataset:
-        run_task(task, config, args.agent_cls)
+    # Process tasks in parallel if requested
+    if args.eval_num_workers > 1:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        with ProcessPoolExecutor(max_workers=args.eval_num_workers) as executor:
+            futures = [
+                executor.submit(run_task, task, config, args.agent_cls)
+                for task in dataset
+            ]
+            results = [f.result() for f in as_completed(futures)]
+    else:
+        results = [run_task(task, config, args.agent_cls) for task in dataset]
+
+    # Calculate and display summary
+    total = len(results)
+    passed = sum(1 for r in results if r['passed'])
+    failed = total - passed
+    print('\nEvaluation Summary:')
+    print(f'Total tasks: {total}')
+    print(f'Passed: {passed} ({passed/total*100:.1f}%)')
+    print(f'Failed: {failed} ({failed/total*100:.1f}%)')
+
+    # Save summary to results file
+    summary = {
+        'total': total,
+        'passed': passed,
+        'failed': failed,
+        'pass_rate': passed / total,
+        'model_config': args.llm_config,
+        'agent_cls': args.agent_cls,
+    }
+    results_file = os.path.join(HTML_FILES_DIR, 'results.json')
+    try:
+        with open(results_file, 'r') as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                data = {'results': data}
+        data['summary'] = summary
+        with open(results_file, 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f'Error saving summary: {e}')
 
 
 if __name__ == '__main__':

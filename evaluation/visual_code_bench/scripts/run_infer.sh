@@ -1,28 +1,27 @@
 #!/bin/bash
-set -eo pipefail
 
-# Usage: ./evaluation/visual_code_bench/scripts/run_infer.sh <model_config> <commit_hash> [agent] [eval_limit] [num_workers]
+# Check if required arguments are provided
+if [ "$#" -lt 4 ]; then
+    echo "Usage: $0 [model_config] [commit_hash] [agent_cls] [eval_limit] [num_workers]"
+    echo "Example: $0 llm.eval_gpt4o_mini HEAD CodeActAgent 5 1"
+    exit 1
+fi
 
 MODEL_CONFIG=$1
 COMMIT_HASH=$2
-AGENT=${3:-CodeActAgent}
-EVAL_LIMIT=${4:-}    # Optional limit on the number of tasks
-NUM_WORKERS=${5:-1}  # Default to 1 worker
+AGENT_CLS=$3
+EVAL_LIMIT=$4
+NUM_WORKERS=${5:-1}  # Default to 1 worker if not specified
 
-echo "MODEL_CONFIG: $MODEL_CONFIG"
-echo "COMMIT_HASH: $COMMIT_HASH"
-echo "AGENT: $AGENT"
-echo "EVAL_LIMIT: $EVAL_LIMIT"
-echo "NUM_WORKERS: $NUM_WORKERS"
+# Navigate to the repository root
+cd "$(git rev-parse --show-toplevel)"
 
-# Optional: Checkout the specific commit/version if needed
-# git checkout $COMMIT_HASH
+# Checkout the specified commit
+git checkout $COMMIT_HASH
 
-# Execute the inference with an optional task limit
-poetry run python evaluation/visual_code_bench/run_infer.py \
-  --agent-cls "$AGENT" \
-  --llm-config "$MODEL_CONFIG" \
-  --max-iterations 5 \
-  --eval-num-workers "$NUM_WORKERS" \
-  --eval-note "commit_$COMMIT_HASH" \
-  ${EVAL_LIMIT:+--eval-n-limit "$EVAL_LIMIT"}
+# Run the evaluation
+python3 -m evaluation.visual_code_bench.run_infer \
+    --llm-config $MODEL_CONFIG \
+    --agent-cls $AGENT_CLS \
+    --eval-n-limit $EVAL_LIMIT \
+    --eval-num-workers $NUM_WORKERS

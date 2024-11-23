@@ -22,7 +22,7 @@ To start an evaluation run, use the following command:
 ./evaluation/visual_code_bench/scripts/run_infer.sh [model_config] [commit_hash] [eval_limit] [num_workers]
 
 # example
-./evaluation/visual_code_bench/scripts/run_infer.sh llm.eval_gpt4o_mini HEAD CodeActAgent 5 1
+./evaluation/visual_code_bench/scripts/run_infer.sh llm.eval_gpt4o_mini HEAD CodeActAgent 1 1
 
 ```
 
